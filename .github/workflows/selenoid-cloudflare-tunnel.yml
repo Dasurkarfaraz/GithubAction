@@ -14,17 +14,17 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # 1. Create browsers.json for Selenoid
+      # 1. Create browsers.json with a known good image
       - name: Setup Selenoid config
         run: |
           mkdir -p /tmp/selenoid
           cat > /tmp/selenoid/browsers.json <<'EOF'
           {
             "chrome": {
-              "default": "latest",
+              "default": "100.0",
               "versions": {
-                "latest": {
-                  "image": "selenoid/vnc:chrome_122.0",
+                "100.0": {
+                  "image": "selenoid/vnc:chrome_100.0",
                   "port": "4444",
                   "path": "/"
                 }
@@ -33,7 +33,11 @@ jobs:
           }
           EOF
 
-      # 2. Start Selenoid (hub) on port 4444
+      # 2. Pre‑pull the browser image to avoid "no such image"
+      - name: Pull Chrome browser image
+        run: docker pull selenoid/vnc:chrome_100.0
+
+      # 3. Start Selenoid hub on port 4444
       - name: Run Selenoid
         run: |
           docker run -d --name selenoid \
@@ -53,7 +57,7 @@ jobs:
             sleep 2
           done
 
-      # 3. Start Selenoid UI on port 8080
+      # 4. Start Selenoid UI on port 8080
       - name: Run Selenoid UI
         run: |
           docker run -d --name selenoid-ui \
@@ -61,20 +65,18 @@ jobs:
             --link selenoid \
             aerokube/selenoid-ui:latest-release \
             --selenoid-uri=http://selenoid:4444
-          # Wait for UI to be up
           sleep 5
           curl -s http://localhost:8080/status || echo "UI starting..."
 
-      # 4. Install Cloudflare Tunnel
+      # 5. Install Cloudflare Tunnel
       - name: Install cloudflared
         run: |
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
           chmod +x cloudflared-linux-amd64
           sudo mv cloudflared-linux-amd64 /usr/local/bin/cloudflared
 
-      # 5. Start tunnel for both ports (or just UI) – we'll expose both via separate tunnels or single tunnel with path routing? Simpler: expose UI only.
-      # But you may want to also expose hub for remote scripts. We'll do two tunnels.
-      - name: Start Cloudflare Tunnel for UI (port 8080)
+      # 6. Expose UI (port 8080) and Hub (port 4444) via separate tunnels
+      - name: Start Cloudflare Tunnel for UI
         id: tunnel_ui
         run: |
           nohup cloudflared tunnel --url http://localhost:8080 --logfile cf_ui.log &
@@ -84,7 +86,7 @@ jobs:
           echo "SELENOID_UI_URL=$UI_URL" >> $GITHUB_ENV
           echo "✅ UI Tunnel URL: $UI_URL"
 
-      - name: Start Cloudflare Tunnel for Hub (port 4444) – optional
+      - name: Start Cloudflare Tunnel for Hub
         id: tunnel_hub
         run: |
           nohup cloudflared tunnel --url http://localhost:4444 --logfile cf_hub.log &
@@ -94,7 +96,7 @@ jobs:
           echo "SELENOID_HUB_URL=$HUB_URL" >> $GITHUB_ENV
           echo "✅ Hub Tunnel URL: $HUB_URL"
 
-      # 6. Show URLs in job summary
+      # 7. Display URLs in job summary
       - name: Display URLs
         run: |
           echo "## 🎛️ Selenoid UI is ready!" >> $GITHUB_STEP_SUMMARY
@@ -110,14 +112,14 @@ jobs:
           echo "2. You'll see running sessions, videos, and logs." >> $GITHUB_STEP_SUMMARY
           echo "3. To run a test, use the Hub URL in your Selenium script." >> $GITHUB_STEP_SUMMARY
 
-      # 7. Keep alive
+      # 8. Keep tunnel alive
       - name: Keep tunnel alive
         run: |
           DURATION=${{ github.event.inputs.duration_minutes || 60 }}
           echo "⏳ Keeping tunnel alive for ${DURATION} minutes. Press cancel to stop."
           sleep $(( DURATION * 60 ))
 
-      # 8. Collect logs (always)
+      # 9. Upload logs (always)
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
